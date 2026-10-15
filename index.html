@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>벽돌깨기</title>
+<style>
+  :root { --bg:#0f1220; --panel:#1a1f36; --text:#e8ebf7; --muted:#8a91b4; --accent:#5ad1ff; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; }
+  body { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:16px;
+    touch-action:none; user-select:none; -webkit-user-select:none; }
+  h1 { margin:0 0 8px; font-size:22px; letter-spacing:2px; }
+  .hud { display:flex; gap:20px; font-size:15px; color:var(--muted); margin-bottom:8px; }
+  .hud b { color:var(--text); }
+  .wrap { position:relative; width:100%; max-width:640px; }
+  canvas { display:block; width:100%; height:auto; background:var(--panel); border-radius:12px;
+    box-shadow:0 10px 40px rgba(0,0,0,.5); }
+  .overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; background:rgba(10,12,24,.72); border-radius:12px; text-align:center; padding:16px; }
+  .overlay.hidden { display:none; }
+  .overlay h2 { margin:0 0 8px; font-size:28px; }
+  .overlay p { margin:4px 0; color:var(--muted); }
+  button { margin-top:14px; padding:10px 26px; font-size:16px; font-weight:600; border:0; border-radius:8px;
+    background:var(--accent); color:#06121c; cursor:pointer; }
+  button:hover { filter:brightness(1.1); }
+  .help { margin-top:10px; font-size:13px; color:var(--muted); text-align:center; }
+</style>
+</head>
+<body>
+<h1>🧱 벽돌깨기</h1>
+<div class="hud">
+  <span>점수 <b id="score">0</b></span>
+  <span>생명 <b id="lives">3</b></span>
+  <span>레벨 <b id="level">1</b></span>
+  <span>최고 <b id="best">0</b></span>
+</div>
+<div class="wrap">
+  <canvas id="c" width="640" height="480"></canvas>
+  <div class="overlay" id="overlay">
+    <h2 id="ovTitle">벽돌깨기</h2>
+    <p id="ovText">공을 튕겨 모든 벽돌을 깨세요!</p>
+    <button id="ovBtn">시작하기</button>
+  </div>
+</div>
+<div class="help">마우스·터치 또는 ← → 키로 이동 · 스페이스로 발사 · P로 일시정지</div>
+
+<script>
+(() => {
+  const W = 640, H = 480;
+  const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const overlay = $('overlay'), ovTitle = $('ovTitle'), ovText = $('ovText'), ovBtn = $('ovBtn');
+
+  const COLS = 10, BW = 56, BH = 20, GAP = 6, TOP = 50;
+  const LEFT = (W - (COLS * BW + (COLS - 1) * GAP)) / 2;
+  const COLORS = ['#ff5d73', '#ff9f43', '#ffd166', '#5ee173', '#5ad1ff', '#9b8cff', '#ff7ad9'];
+
+  let best = 0;
+  try { best = +localStorage.getItem('brickBest') || 0; } catch (e) {}
+  $('best').textContent = best;
+
+  const paddle = { w: 100, h: 12, x: W / 2 - 50, y: H - 30, speed: 9 };
+  const ball = { r: 8, x: 0, y: 0, vx: 0, vy: 0, stuck: true };
+  let bricks = [], score = 0, lives = 3, level = 1, state = 'menu';
+  const keys = {};
+  let particles = [];
+
+  function buildLevel(n) {
+    bricks = [];
+    const rows = Math.min(4 + n, 8);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < COLS; c++) {
+        // 레벨별 패턴: 짝수 레벨은 체크무늬로 빈칸
+        if (n % 3 === 2 && (r + c) % 2 === 1) continue;
+        const hp = n >= 3 && r < Math.floor(n / 2) ? 2 : 1;
+        bricks.push({ x: LEFT + c * (BW + GAP), y: TOP + r * (BH + GAP), hp, color: COLORS[r % COLORS.length] });
+      }
+    }
+  }
+
+  function resetBall() {
+    ball.stuck = true;
+    ball.x = paddle.x + paddle.w / 2;
+    ball.y = paddle.y - ball.r - 1;
+    ball.vx = ball.vy = 0;
+  }
+
+  function launch() {
+    if (!ball.stuck) return;
+    const sp = 5 + level * 0.6;
+    const ang = (Math.random() * 0.6 - 0.3) - Math.PI / 2;
+    ball.vx = Math.cos(ang) * sp;
+    ball.vy = Math.sin(ang) * sp;
+    ball.stuck = false;
+  }
+
+  function hud() {
+    $('score').textContent = score;
+    $('lives').textContent = lives;
+    $('level').textContent = level;
+  }
+
+  function showOverlay(title, text, btn) {
+    ovTitle.textContent = title; ovText.textContent = text; ovBtn.textContent = btn;
+    overlay.classList.remove('hidden');
+  }
+
+  function startGame() {
+    score = 0; lives = 3; level = 1;
+    buildLevel(level); resetBall(); hud();
+    overlay.classList.add('hidden');
+    state = 'play';
+  }
+
+  function nextLevel() {
+    level++;
+    buildLevel(level); resetBall(); hud();
+    overlay.classList.add('hidden');
+    state = 'play';
+  }
+
+  function gameOver() {
+    state = 'over';
+    if (score > best) {
+      best = score; $('best').textContent = best;
+      try { localStorage.setItem('brickBest', best); } catch (e) {}
+    }
+    showOverlay('게임 오버', `점수: ${score}`, '다시 하기');
+  }
+
+  ovBtn.addEventListener('click', () => {
+    if (state === 'clear') nextLevel();
+    else if (state === 'pause') { state = 'play'; overlay.classList.add('hidden'); }
+    else startGame();
+  });
+
+  // 입력
+  function pointerX(clientX) {
+    const rect = cv.getBoundingClientRect();
+    return (clientX - rect.left) * (W / rect.width);
+  }
+  function movePaddleTo(x) {
+    paddle.x = Math.max(0, Math.min(W - paddle.w, x - paddle.w / 2));
+  }
+  cv.addEventListener('mousemove', e => { if (state === 'play') movePaddleTo(pointerX(e.clientX)); });
+  cv.addEventListener('mousedown', () => { if (state === 'play') launch(); });
+  cv.addEventListener('touchstart', e => {
+    if (state !== 'play') return;
+    movePaddleTo(pointerX(e.touches[0].clientX)); launch(); e.preventDefault();
+  }, { passive: false });
+  cv.addEventListener('touchmove', e => {
+    if (state === 'play') movePaddleTo(pointerX(e.touches[0].clientX));
+    e.preventDefault();
+  }, { passive: false });
+  window.addEventListener('keydown', e => {
+    keys[e.key] = true;
+    if (e.key === ' ') {
+      e.preventDefault();
+      if (state === 'play') launch();
+      else if (state !== 'pause') ovBtn.click();
+    }
+    if ((e.key === 'p' || e.key === 'P') && (state === 'play' || state === 'pause')) {
+      if (state === 'play') { state = 'pause'; showOverlay('일시정지', 'P 또는 버튼을 눌러 계속하세요', '계속하기'); }
+      else { state = 'play'; overlay.classList.add('hidden'); }
+    }
+  });
+  window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+  function burst(x, y, color) {
+    for (let i = 0; i < 10; i++) {
+      particles.push({ x, y, vx: (Math.random() - .5) * 5, vy: (Math.random() - .5) * 5, life: 30, color });
+    }
+  }
+
+  function update() {
+    if (keys['ArrowLeft']) paddle.x = Math.max(0, paddle.x - paddle.speed);
+    if (keys['ArrowRight']) paddle.x = Math.min(W - paddle.w, paddle.x + paddle.speed);
+
+    if (ball.stuck) { ball.x = paddle.x + paddle.w / 2; ball.y = paddle.y - ball.r - 1; return; }
+
+    // 터널링 방지를 위해 여러 번 나눠서 이동
+    const steps = Math.ceil(Math.hypot(ball.vx, ball.vy) / 4);
+    for (let s = 0; s < steps; s++) {
+      ball.x += ball.vx / steps;
+      ball.y += ball.vy / steps;
+
+      if (ball.x < ball.r) { ball.x = ball.r; ball.vx = Math.abs(ball.vx); }
+      if (ball.x > W - ball.r) { ball.x = W - ball.r; ball.vx = -Math.abs(ball.vx); }
+      if (ball.y < ball.r) { ball.y = ball.r; ball.vy = Math.abs(ball.vy); }
+
+      // 패들 충돌: 맞은 위치에 따라 반사 각도 변경
+      if (ball.vy > 0 && ball.y + ball.r >= paddle.y && ball.y + ball.r <= paddle.y + paddle.h + 6 &&
+          ball.x >= paddle.x - ball.r && ball.x <= paddle.x + paddle.w + ball.r) {
+        const hit = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+        const sp = Math.hypot(ball.vx, ball.vy);
+        const ang = Math.max(-1, Math.min(1, hit)) * (Math.PI / 3);
+        ball.vx = sp * Math.sin(ang);
+        ball.vy = -sp * Math.cos(ang);
+        ball.y = paddle.y - ball.r;
+      }
+
+      for (let i = 0; i < bricks.length; i++) {
+        const b = bricks[i];
+        const cx = Math.max(b.x, Math.min(ball.x, b.x + BW));
+        const cy = Math.max(b.y, Math.min(ball.y, b.y + BH));
+        const dx = ball.x - cx, dy = ball.y - cy;
+        if (dx * dx + dy * dy <= ball.r * ball.r) {
+          const overlapX = Math.min(ball.x + ball.r - b.x, b.x + BW - (ball.x - ball.r));
+          const overlapY = Math.min(ball.y + ball.r - b.y, b.y + BH - (ball.y - ball.r));
+          if (overlapX < overlapY) ball.vx = -ball.vx; else ball.vy = -ball.vy;
+          b.hp--;
+          if (b.hp <= 0) {
+            burst(b.x + BW / 2, b.y + BH / 2, b.color);
+            bricks.splice(i, 1);
+            score += 10 * level;
+          } else score += 5;
+          // 벽돌을 깰 때마다 아주 조금씩 빨라짐
+          ball.vx *= 1.01; ball.vy *= 1.01;
+          hud();
+          break;
+        }
+      }
+    }
+
+    if (ball.y - ball.r > H) {
+      lives--; hud();
+      if (lives <= 0) return gameOver();
+      resetBall();
+    }
+
+    if (bricks.length === 0) {
+      state = 'clear';
+      showOverlay(`레벨 ${level} 클리어!`, `점수: ${score}`, '다음 레벨');
+    }
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    for (const b of bricks) {
+      ctx.fillStyle = b.color;
+      ctx.globalAlpha = b.hp > 1 ? 1 : 0.85;
+      roundRect(b.x, b.y, BW, BH, 4); ctx.fill();
+      if (b.hp > 1) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
+    }
+    ctx.globalAlpha = 1;
+
+    particles = particles.filter(p => p.life > 0);
+    for (const p of particles) {
+      p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life--;
+      ctx.globalAlpha = p.life / 30; ctx.fillStyle = p.color;
+      ctx.fillRect(p.x, p.y, 3, 3);
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = '#5ad1ff';
+    roundRect(paddle.x, paddle.y, paddle.w, paddle.h, 6); ctx.fill();
+
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2); ctx.fill();
+
+    if (state === 'play' && ball.stuck) {
+      ctx.fillStyle = 'rgba(232,235,247,.7)'; ctx.font = '16px system-ui, sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('클릭·탭 또는 스페이스로 발사', W / 2, H / 2 + 60);
+    }
+  }
+
+  function loop() {
+    if (state === 'play') update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  buildLevel(1); resetBall(); hud();
+  loop();
+})();
+</script>
+</body>
+</html>
